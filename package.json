@@ -1,0 +1,12 @@
+{
+  "name": "perfil-web",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run tests"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0",
+    "vitest": "^1.6.0"
+  }
+}
