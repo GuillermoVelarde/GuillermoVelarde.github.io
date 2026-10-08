@@ -10,32 +10,39 @@ permissions:
   contents: read
 
 jobs:
-  # 1. BUILD: Lintering y generación del artefacto
+  # 2. BUILD: Linter y preparación del artefacto
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout del código
         uses: actions/checkout@v4
 
-      - name: Linter para HTML (HTMLHint)
+      - name: Linters HTML
         run: |
-          npx htmlhint index.html || npx htmlhint frontend/index.html || true
+          npx htmlhint index.html || true
 
-      - name: Preparar sitio estático (_site)
+      - name: Armar carpeta _site
         run: |
           mkdir -p _site
           if [ -d "frontend" ]; then
             cp -r frontend/* _site/
           else
-            cp -r index.html estilos.css libro-de-visitas.js imagenes/ _site/ 2>/dev/null || cp index.html _site/
+            cp -r index.html estilos.css libro-de-visitas.js imagenes/ _site/ 2>/dev/null || cp -r * _site/ 2>/dev/null || true
           fi
+          rm -rf _site/compose.yaml _site/.env.example _site/api _site/db _site/tests _site/.github
+
+      - name: Subir artefacto para pruebas
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-artifact
+          path: _site/
 
       - name: Subir artefacto de GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site/
 
-  # 2. TEST: Ejecución de pruebas
+  # 3. TEST: Pruebas con Vitest
   test:
     needs: build
     runs-on: ubuntu-latest
@@ -43,23 +50,99 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v4
 
+      - name: Descargar artefacto del sitio
+        uses: actions/download-artifact@v4
+        with:
+          name: site-artifact
+          path: _site/
+
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Verificar instalación de pruebas
+      - name: Instalar dependencias y ejecutar pruebas
         run: |
-          if [ -f "package.json" ]; then
-            npm ci || npm install
-            npm test || echo "Pruebas pasadas"
-          else
-            echo "No se encontró package.json, omitiendo vitest en esta ejecución preliminar"
-          fi
+          npm ci || npm install
+          npm test
 
-  # 3. DEPLOY-PROD: Despliegue directo a GitHub Pages
-  deploy-prod:
+  # 4. PACKAGE: Construir y publicar imagen Docker en GHCR
+  package:
     needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Descargar artefacto del sitio
+        uses: actions/download-artifact@v4
+        with:
+          name: site-artifact
+          path: _site/
+
+      - name: Extraer SHA corto y Owner en minúsculas
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Iniciar sesión en GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construir y publicar imagen Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}
+
+  # 5. SECURITY: Escaneo con Trivy sobre la imagen generada
+  security:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extraer SHA corto y Owner en minúsculas
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Escanear imagen con Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}'
+          severity: 'CRITICAL'
+          exit-code: '0'
+          ignore-unfixed: true
+
+  # 7. SMOKE: Verificación básica del contenedor
+  smoke:
+    needs: security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extraer SHA corto y Owner en minúsculas
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Iniciar contenedor y ejecutar prueba rápida
+        run: |
+          docker run -d -p 8080:80 --name test-container ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}
+          sleep 3
+          curl -f http://localhost:8080/ || exit 1
+
+  # 8. DEPLOY-PROD: Despliegue a producción con aprobación manual
+  deploy-prod:
+    needs: smoke
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
