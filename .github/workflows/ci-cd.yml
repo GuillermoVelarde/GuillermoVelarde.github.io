@@ -83,10 +83,9 @@ jobs:
           name: site-artifact
           path: _site/
 
-      - name: Extraer SHA corto y Owner en minúsculas
+      - name: Obtener nombre de propietario en minúsculas
         id: vars
         run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Iniciar sesión en GitHub Container Registry
@@ -96,29 +95,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extraer metadatos para la imagen
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
       - name: Construir y publicar imagen Docker
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}
+          tags: ${{ steps.meta.outputs.tags }}
 
   # 5. SECURITY: Escaneo con Trivy sobre la imagen generada
   security:
     needs: package
     runs-on: ubuntu-latest
     steps:
-      - name: Extraer SHA corto y Owner en minúsculas
+      - name: Obtener nombre de propietario en minúsculas
         id: vars
         run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Escanear imagen con Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}'
+          image-ref: 'ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:latest'
           severity: 'CRITICAL'
           exit-code: '0'
           ignore-unfixed: true
@@ -128,15 +135,14 @@ jobs:
     needs: security
     runs-on: ubuntu-latest
     steps:
-      - name: Extraer SHA corto y Owner en minúsculas
+      - name: Obtener nombre de propietario en minúsculas
         id: vars
         run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Iniciar contenedor y ejecutar prueba rápida
         run: |
-          docker run -d -p 8080:80 --name test-container ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}
+          docker run -d -p 8080:80 --name test-container ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:latest
           sleep 3
           curl -f http://localhost:8080/ || exit 1
 
