@@ -10,9 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  # ------------------------------------------------------------------
-  # 2. BUILD: Lintering y generación del artefacto
-  # ------------------------------------------------------------------
+  # 1. BUILD: Lintering y generación del artefacto
   build:
     runs-on: ubuntu-latest
     steps:
@@ -37,9 +35,7 @@ jobs:
         with:
           path: _site/
 
-  # ------------------------------------------------------------------
-  # 3. TEST: Ejecución de pruebas sobre _site/
-  # ------------------------------------------------------------------
+  # 2. TEST: Ejecución de pruebas
   test:
     needs: build
     runs-on: ubuntu-latest
@@ -61,95 +57,9 @@ jobs:
             echo "No se encontró package.json, omitiendo vitest en esta ejecución preliminar"
           fi
 
-  # ------------------------------------------------------------------
-  # 4. PACKAGE: Construcción de la imagen Docker en GHCR
-  # ------------------------------------------------------------------
-  package:
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout del código
-        uses: actions/checkout@v4
-
-      - name: Extraer SHA corto y Owner en minúsculas
-        id: vars
-        run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-
-      - name: Autenticación en GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build y Push de la imagen
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-
-  # ------------------------------------------------------------------
-  # 5. SECURITY: Escaneo con Trivy
-  # ------------------------------------------------------------------
-  security:
-    needs: package
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout del código
-        uses: actions/checkout@v4
-
-      - name: Extraer SHA corto y Owner en minúsculas
-        id: vars
-        run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-
-      - name: Escanear imagen con Trivy
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}'
-          format: 'table'
-          exit-code: '0'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL'
-
-  # ------------------------------------------------------------------
-  # 6. SMOKE: Verificación rápida del contenedor
-  # ------------------------------------------------------------------
-  smoke:
-    needs: security
-    runs-on: ubuntu-latest
-    steps:
-      - name: Extraer SHA corto y Owner en minúsculas
-        id: vars
-        run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-
-      - name: Iniciar contenedor web
-        run: |
-          docker run -d -p 8080:80 --name test-app ghcr.io/${{ steps.vars.outputs.owner_lc }}/perfil-web:sha-${{ steps.vars.outputs.sha_short }}
-          sleep 3
-
-      - name: Verificar endpoint HTTP /
-        run: |
-          curl -f http://localhost:8080/ || exit 1
-
-  # ------------------------------------------------------------------
-  # 8. DEPLOY-PROD: Despliegue con aprobación
-  # ------------------------------------------------------------------
+  # 3. DEPLOY-PROD: Despliegue directo a GitHub Pages
   deploy-prod:
-    needs: smoke
+    needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
